@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W-TinyLFU Cache Simulator</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+       background: #0a0a0f; color: #c0c0c0; font-size: 13px; }
+
+.header { background: #12121a; padding: 12px 20px; border-bottom: 1px solid #222;
+          display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.header h1 { font-size: 15px; color: #7aa2f7; font-weight: 600; }
+.header .phase { padding: 3px 10px; border-radius: 3px; font-size: 12px; font-weight: 600; }
+.phase-warmup { background: #1a3a1a; color: #4ade80; }
+.phase-attack { background: #3a1a1a; color: #f87171; }
+
+.controls { background: #12121a; padding: 10px 20px; border-bottom: 1px solid #222;
+            display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.controls label { color: #888; font-size: 11px; }
+.controls input { background: #1a1a24; border: 1px solid #333; color: #c0c0c0;
+                  padding: 3px 6px; width: 70px; border-radius: 3px; font-family: inherit; }
+.controls button { background: #1a2a4a; border: 1px solid #334; color: #7aa2f7;
+                   padding: 4px 12px; border-radius: 3px; cursor: pointer;
+                   font-family: inherit; font-size: 12px; }
+.controls button:hover { background: #2a3a5a; }
+.controls button.danger { background: #3a1a1a; color: #f87171; border-color: #533; }
+.controls button.active { background: #2a4a2a; color: #4ade80; border-color: #353; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px;
+        background: #222; padding: 1px; }
+.panel { background: #12121a; padding: 12px; min-height: 200px; }
+.panel h2 { font-size: 12px; color: #7aa2f7; margin-bottom: 8px;
+            text-transform: uppercase; letter-spacing: 1px; }
+.panel h3 { font-size: 11px; color: #888; margin: 6px 0 4px; }
+
+.kpi-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.kpi { text-align: center; flex: 1; padding: 6px; border-radius: 4px; background: #1a1a24; }
+.kpi .val { font-size: 18px; font-weight: 700; }
+.kpi .lbl { font-size: 10px; color: #666; margin-top: 2px; }
+.hot-color { color: #f7768e; }
+.scan-color { color: #7dcfff; }
+
+.seg-bar { display: flex; height: 24px; border-radius: 3px; overflow: hidden;
+           margin: 4px 0; background: #1a1a24; }
+.seg-bar .chunk { display: flex; align-items: center; justify-content: center;
+                  font-size: 10px; font-weight: 600; color: #000; min-width: 2px; }
+.chunk-hot-win { background: #e0af68; }
+.chunk-scan-win { background: #544a30; }
+.chunk-hot-prob { background: #bb9af7; }
+.chunk-scan-prob { background: #443a5a; }
+.chunk-hot-prot { background: #9ece6a; }
+.chunk-scan-prot { background: #3a4a2a; }
+
+.key-grid { display: flex; flex-wrap: wrap; gap: 1px; margin: 4px 0; }
+.key-cell { width: 5px; height: 5px; border-radius: 1px; }
+.key-none { background: #1a1a24; }
+.key-window { background: #e0af68; }
+.key-probation { background: #bb9af7; }
+.key-protected { background: #9ece6a; }
+
+.age-hist { display: flex; align-items: flex-end; gap: 1px; height: 40px; margin: 4px 0; }
+.age-bar { flex: 1; min-width: 2px; border-radius: 1px 1px 0 0; }
+
+.freq-dist { display: flex; gap: 2px; align-items: flex-end; height: 50px; margin: 4px 0; }
+
+canvas { image-rendering: pixelated; }
+
+.wide { grid-column: span 3; }
+
+.legend { display: flex; gap: 12px; font-size: 10px; margin: 6px 0; flex-wrap: wrap; }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.legend .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+.info { background: #12121a; padding: 8px 20px; border-bottom: 1px solid #222;
+        font-size: 11px; color: #555; }
+.info a { color: #7aa2f7; text-decoration: none; }
+.info a:hover { text-decoration: underline; }
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+  .wide { grid-column: span 1; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>W-TinyLFU Cache Simulator</h1>
+  <span id="phase-badge" class="phase phase-warmup">WARMUP</span>
+  <span style="color:#555">Batch: <span id="batch-num">0</span></span>
+  <span style="color:#555">Speed: <span id="speed-val">20</span> batches/s</span>
+</div>
+
+<div class="controls">
+  <label>Cache <input id="p-capacity" type="number" value="1000"></label>
+  <label>Hot keys <input id="p-hot" type="number" value="500"></label>
+  <label>Scan keys <input id="p-scan" type="number" value="10000"></label>
+  <label>Zipf s <input id="p-zipf" type="number" step="0.01" value="0.80"></label>
+  <label>Hot/batch <input id="p-hotrate" type="number" value="500"></label>
+  <label>Scan/batch <input id="p-scanrate" type="number" value="1500"></label>
+  <button onclick="doReset()">Reset &amp; Start</button>
+  <button onclick="setPhase('warmup')" id="btn-warmup" class="active">Warmup</button>
+  <button onclick="setPhase('attack')" id="btn-attack" class="danger">Attack!</button>
+  <button onclick="togglePause()" id="btn-pause">Pause</button>
+</div>
+
+<div class="info">
+  Simulates <a href="https://arxiv.org/abs/1512.00727" target="_blank">W-TinyLFU</a> admission
+  policy with Window / Probation / Protected segments and a Count-Min Sketch.
+  Compares three window sizes (1%, 50%, 99%) side by side.
+  Based on the cache implementation in <a href="https://github.com/scylladb/scylladb" target="_blank">ScyllaDB</a>.
+</div>
+
+<div class="grid" id="main-grid"></div>
+
+<script>
+// =========================================================================
+// Count-Min Sketch (matches utils/count_min_sketch.hh)
+// =========================================================================
+
+class CountMinSketch {
+  constructor(widthLog2) {
+    this.widthLog2 = widthLog2;
+    this.width = 1 << widthLog2;
+    this.mask = this.width - 1;
+    this.rows = [
+      new Uint8Array(this.width),
+      new Uint8Array(this.width),
+      new Uint8Array(this.width),
+      new Uint8Array(this.width),
+    ];
+    this.seeds = [0x9e3779b9, 0x517cc1b7, 0x6a09e667, 0xbb67ae85];
+  }
+
+  _hash(key, row) {
+    let h = Math.imul(key, this.seeds[row]) >>> 0;
+    h ^= h >>> 16;
+    return h & this.mask;
+  }
+
+  increment(key) {
+    for (let r = 0; r < 4; r++) {
+      const idx = this._hash(key, r);
+      if (this.rows[r][idx] < 15) this.rows[r][idx]++;
+    }
+  }
+
+  estimate(key) {
+    let min = 15;
+    for (let r = 0; r < 4; r++) {
+      const v = this.rows[r][this._hash(key, r)];
+      if (v < min) min = v;
+    }
+    return min;
+  }
+
+  reset() {
+    for (let r = 0; r < 4; r++) {
+      for (let i = 0; i < this.width; i++) {
+        this.rows[r][i] >>= 1;
+      }
+    }
+  }
+}
+
+// =========================================================================
+// W-TinyLFU Cache Simulator
+// =========================================================================
+
+class WTinyLFUCache {
+  constructor(capacity, windowPct) {
+    this.capacity = capacity;
+    this.windowPct = windowPct;
+
+    this.windowMax = Math.max(1, Math.floor(capacity * windowPct / 100));
+    const slru = capacity - this.windowMax;
+    this.probationMax = Math.max(1, Math.floor(slru * 0.20));
+    this.protectedMax = slru - this.probationMax;
+
+    // Using Maps preserves insertion order (like Python OrderedDict)
+    this.window = new Map();
+    this.probation = new Map();
+    this.protected = new Map();
+
+    // key -> segment name
+    this.lookup = new Map();
+
+    const sketchWidth = Math.max(8, Math.floor(Math.log2(capacity * 4)));
+    this.sketch = new CountMinSketch(sketchWidth);
+
+    this.sampleCount = 0;
+    this.sampleThreshold = Math.max(100, capacity * 10);
+
+    this.jitterState = 0xDEADBEEF;
+
+    this.hotHits = 0;
+    this.hotMisses = 0;
+    this.scanHits = 0;
+    this.scanMisses = 0;
+    this.admissions = 0;
+    this.rejections = 0;
+    this.tick = 0;
+
+    this.batchHotHits = 0;
+    this.batchHotMisses = 0;
+    this.batchScanHits = 0;
+    this.batchScanMisses = 0;
+
+    this.historyLen = 600;
+    this.history = [];
+  }
+
+  _jitter() {
+    let s = this.jitterState >>> 0;
+    s ^= (s << 13) >>> 0;
+    s ^= s >>> 17;
+    s ^= (s << 5) >>> 0;
+    this.jitterState = s;
+    return s;
+  }
+
+  _recordAccess(key) {
+    this.sketch.increment(key);
+    this.sampleCount++;
+    if (this.sampleCount >= this.sampleThreshold) {
+      this.sketch.reset();
+      this.sampleCount = 0;
+    }
+  }
+
+  _segMap(name) {
+    if (name === 'window') return this.window;
+    if (name === 'probation') return this.probation;
+    if (name === 'protected') return this.protected;
+  }
+
+  _rebalanceProtected() {
+    while (this.protected.size > this.protectedMax && this.protected.size > 0) {
+      const [key, entry] = this.protected.entries().next().value;
+      this.protected.delete(key);
+      entry.segment = 'probation';
+      this.probation.set(key, entry);
+      this.lookup.set(key, 'probation');
+    }
+  }
+
+  _drainWindow() {
+    this._rebalanceProtected();
+    // Drain window all the way to target size. Each iteration either:
+    // - Admits window entry to probation and evicts probation victim, or
+    // - Rejects (evicts) window entry, or
+    // - Moves window entry to probation when probation is empty
+    while (this.window.size > this.windowMax && this.window.size > 0) {
+      const [wKey, wEntry] = this.window.entries().next().value;
+
+      if (this.probation.size > 0) {
+        const [pKey] = this.probation.entries().next().value;
+        const wFreq = this.sketch.estimate(wKey);
+        const pFreq = this.sketch.estimate(pKey);
+
+        let admit = false;
+        if (wFreq > pFreq) {
+          admit = true;
+        } else if (wFreq >= 6) {
+          admit = (this._jitter() & 127) === 0;
+        }
+
+        if (admit) {
+          this.window.delete(wKey);
+          wEntry.segment = 'probation';
+          this.probation.set(wKey, wEntry);
+          this.lookup.set(wKey, 'probation');
+          this.probation.delete(pKey);
+          this.lookup.delete(pKey);
+          this.admissions++;
+        } else {
+          this.window.delete(wKey);
+          this.lookup.delete(wKey);
+          this.rejections++;
+        }
+      } else {
+        this.window.delete(wKey);
+        wEntry.segment = 'probation';
+        this.probation.set(wKey, wEntry);
+        this.lookup.set(wKey, 'probation');
+      }
+    }
+  }
+
+  _evictForCapacity() {
+    for (const segName of ['probation', 'window', 'protected']) {
+      const seg = this._segMap(segName);
+      if (seg.size > 0) {
+        const [key] = seg.entries().next().value;
+        seg.delete(key);
+        this.lookup.delete(key);
+        return;
+      }
+    }
+  }
+
+  access(key, source) {
+    this.tick++;
+    const now = this.tick;
+
+    const segName = this.lookup.get(key);
+    if (segName !== undefined) {
+      // HIT
+      this._recordAccess(key);
+      const seg = this._segMap(segName);
+      const entry = seg.get(key);
+      entry.lastAccess = now;
+
+      if (segName === 'window') {
+        seg.delete(key);
+        seg.set(key, entry);
+      } else if (segName === 'probation') {
+        seg.delete(key);
+        entry.segment = 'protected';
+        this.protected.set(key, entry);
+        this.lookup.set(key, 'protected');
+      } else if (segName === 'protected') {
+        seg.delete(key);
+        seg.set(key, entry);
+      }
+
+      if (source === 'hot') { this.hotHits++; this.batchHotHits++; }
+      else { this.scanHits++; this.batchScanHits++; }
+      return true;
+    } else {
+      // MISS
+      this._recordAccess(key);
+      const entry = { key, source, segment: 'window', insertTime: now, lastAccess: now };
+      this.window.set(key, entry);
+      this.lookup.set(key, 'window');
+
+      let total = this.window.size + this.probation.size + this.protected.size;
+      while (total > this.capacity) {
+        this._drainWindow();
+        total = this.window.size + this.probation.size + this.protected.size;
+        if (total > this.capacity) {
+          this._evictForCapacity();
+          total = this.window.size + this.probation.size + this.protected.size;
+        }
+      }
+
+      if (source === 'hot') { this.hotMisses++; this.batchHotMisses++; }
+      else { this.scanMisses++; this.batchScanMisses++; }
+      return false;
+    }
+  }
+
+  snapshot() {
+    const now = this.tick;
+
+    const segInfo = (seg, name) => {
+      const hotKeys = [];
+      const scanKeys = [];
+      const ages = [];
+      for (const [k, e] of seg) {
+        ages.push(now - e.insertTime);
+        if (e.source === 'hot') hotKeys.push(k);
+        else scanKeys.push(k);
+      }
+      return {
+        name,
+        size: seg.size,
+        hotCount: hotKeys.length,
+        scanCount: scanKeys.length,
+        hotKeys,
+        scanKeys,
+        avgAge: ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : 0,
+        maxAge: ages.length ? Math.max(...ages) : 0,
+        ages,
+      };
+    };
+
+    const freqHot = [];
+    const freqScan = [];
+    for (const [k, segName] of this.lookup) {
+      const f = this.sketch.estimate(k);
+      const seg = this._segMap(segName);
+      const entry = seg.get(k);
+      if (entry.source === 'hot') freqHot.push(f);
+      else freqScan.push(f);
+    }
+
+    const hotTotal = this.hotHits + this.hotMisses;
+    const scanTotal = this.scanHits + this.scanMisses;
+
+    return {
+      tick: now,
+      capacity: this.capacity,
+      windowPct: this.windowPct,
+      segments: {
+        window: segInfo(this.window, 'window'),
+        probation: segInfo(this.probation, 'probation'),
+        protected: segInfo(this.protected, 'protected'),
+      },
+      hotHr: hotTotal ? this.hotHits / hotTotal * 100 : 0,
+      scanHr: scanTotal ? this.scanHits / scanTotal * 100 : 0,
+      hotHits: this.hotHits,
+      hotMisses: this.hotMisses,
+      scanHits: this.scanHits,
+      scanMisses: this.scanMisses,
+      admissions: this.admissions,
+      rejections: this.rejections,
+      freqHot,
+      freqScan,
+    };
+  }
+
+  recordHistory() {
+    const hotTotal = this.hotHits + this.hotMisses;
+    const scanTotal = this.scanHits + this.scanMisses;
+    const batchHot = this.batchHotHits + this.batchHotMisses;
+    const batchScan = this.batchScanHits + this.batchScanMisses;
+
+    this.history.push({
+      tick: this.tick,
+      hotHr: hotTotal ? this.hotHits / hotTotal * 100 : 0,
+      scanHr: scanTotal ? this.scanHits / scanTotal * 100 : 0,
+      batchHotHr: batchHot ? this.batchHotHits / batchHot * 100 : 0,
+      batchScanHr: batchScan ? this.batchScanHits / batchScan * 100 : 0,
+      windowHot: [...this.window.values()].filter(e => e.source === 'hot').length,
+      windowScan: [...this.window.values()].filter(e => e.source === 'scan').length,
+      probationHot: [...this.probation.values()].filter(e => e.source === 'hot').length,
+      probationScan: [...this.probation.values()].filter(e => e.source === 'scan').length,
+      protectedHot: [...this.protected.values()].filter(e => e.source === 'hot').length,
+      protectedScan: [...this.protected.values()].filter(e => e.source === 'scan').length,
+    });
+
+    if (this.history.length > this.historyLen) {
+      this.history = this.history.slice(-this.historyLen);
+    }
+
+    this.batchHotHits = 0;
+    this.batchHotMisses = 0;
+    this.batchScanHits = 0;
+    this.batchScanMisses = 0;
+  }
+}
+
+// =========================================================================
+// Simulation Runner
+// =========================================================================
+
+class SimRunner {
+  constructor() {
+    this.caches = {};
+    this.configs = [];
+    this.params = {
+      cacheCapacity: 1000,
+      hotKeys: 500,
+      scanKeys: 10000,
+      zipfS: 0.8,
+      windowPct: 1,
+      hotRate: 500,
+      scanRate: 1500,
+      phase: 'warmup',
+    };
+    this.scanCursor = 0;
+    this.batchCount = 0;
+  }
+
+  reset(params) {
+    if (params) Object.assign(this.params, params);
+    const p = this.params;
+    this.caches = {};
+    this.configs = [1, 50, 99];
+    for (const wpct of this.configs) {
+      this.caches[wpct] = new WTinyLFUCache(p.cacheCapacity, wpct);
+    }
+    this.scanCursor = 0;
+    this.batchCount = 0;
+    this.params.phase = 'warmup';
+  }
+
+  _zipfKey(i) {
+    const p = this.params;
+    const N = p.hotKeys;
+    const s = p.zipfS;
+    const alpha = 1.0 / (1.0 - s);
+    // Simple hash for pseudo-random uniform
+    let h = ((i * 2654435761) ^ 0x12345) >>> 0;
+    h = ((h ^ (h >>> 16)) * 0x45d9f3b) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    const u = (h % 1000000 + 1) / 1000001.0;
+    return Math.floor(N * Math.pow(u, alpha)) % N;
+  }
+
+  runBatch() {
+    const p = this.params;
+    const phase = p.phase;
+
+    // Each cache gets the same workload for fair comparison
+    const batchScanStart = this.scanCursor;
+    for (const wpct of this.configs) {
+      const cache = this.caches[wpct];
+      if (phase === 'warmup') {
+        for (let i = 0; i < p.hotRate; i++) {
+          const key = this._zipfKey(this.batchCount * p.hotRate + i);
+          cache.access(key, 'hot');
+        }
+      } else {
+        for (let i = 0; i < p.hotRate; i++) {
+          const key = this._zipfKey(this.batchCount * p.hotRate + i);
+          cache.access(key, 'hot');
+        }
+        for (let i = 0; i < p.scanRate; i++) {
+          const key = p.hotKeys + ((batchScanStart + i) % p.scanKeys);
+          cache.access(key, 'scan');
+        }
+      }
+      cache.recordHistory();
+    }
+    this.scanCursor = batchScanStart + p.scanRate;
+    this.batchCount++;
+  }
+
+  getState() {
+    const result = {
+      params: { ...this.params },
+      batch: this.batchCount,
+      configs: {},
+    };
+    for (const wpct of this.configs) {
+      const snap = this.caches[wpct].snapshot();
+      snap.history = this.caches[wpct].history;
+      result.configs[String(wpct)] = snap;
+    }
+    return result;
+  }
+}
+
+// =========================================================================
+// UI
+// =========================================================================
+
+const SIM = new SimRunner();
+let paused = false;
+let timerHandle = null;
+
+function doReset() {
+  SIM.reset({
+    cacheCapacity: +document.getElementById('p-capacity').value,
+    hotKeys: +document.getElementById('p-hot').value,
+    scanKeys: +document.getElementById('p-scan').value,
+    zipfS: +document.getElementById('p-zipf').value,
+    hotRate: +document.getElementById('p-hotrate').value,
+    scanRate: +document.getElementById('p-scanrate').value,
+  });
+  render(SIM.getState());
+}
+
+function setPhase(ph) {
+  SIM.params.phase = ph;
+  document.getElementById('btn-warmup').classList.toggle('active', ph === 'warmup');
+  document.getElementById('btn-attack').classList.toggle('active', ph === 'attack');
+}
+
+function togglePause() {
+  paused = !paused;
+  document.getElementById('btn-pause').textContent = paused ? 'Resume' : 'Pause';
+  document.getElementById('btn-pause').classList.toggle('active', paused);
+}
+
+function makeSegBar(seg, maxCap) {
+  const w = (v) => Math.max(0, v / maxCap * 100);
+  return `<div class="seg-bar">
+    <div class="chunk chunk-hot-win" style="width:${w(seg.window.hot)}%">${seg.window.hot || ''}</div>
+    <div class="chunk chunk-scan-win" style="width:${w(seg.window.scan)}%">${seg.window.scan || ''}</div>
+    <div class="chunk chunk-hot-prob" style="width:${w(seg.probation.hot)}%">${seg.probation.hot || ''}</div>
+    <div class="chunk chunk-scan-prob" style="width:${w(seg.probation.scan)}%">${seg.probation.scan || ''}</div>
+    <div class="chunk chunk-hot-prot" style="width:${w(seg.protected.hot)}%">${seg.protected.hot || ''}</div>
+    <div class="chunk chunk-scan-prot" style="width:${w(seg.protected.scan)}%">${seg.protected.scan || ''}</div>
+  </div>`;
+}
+
+function makeKeyGrid(cfg, hotKeys) {
+  const segs = cfg.segments;
+  const keyMap = {};
+  for (const k of segs.window.hotKeys) keyMap[k] = 'window';
+  for (const k of segs.probation.hotKeys) keyMap[k] = 'probation';
+  for (const k of segs.protected.hotKeys) keyMap[k] = 'protected';
+
+  let html = '<div class="key-grid">';
+  const show = Math.min(hotKeys, 2000);
+  for (let i = 0; i < show; i++) {
+    const seg = keyMap[i] || 'none';
+    html += `<div class="key-cell key-${seg}" title="key ${i}: ${seg}"></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function makeAgeHist(ages, color, maxAge) {
+  if (!ages || ages.length === 0) return '<div style="color:#444;font-size:10px">empty</div>';
+  const buckets = 20;
+  const step = Math.max(1, Math.ceil((maxAge || Math.max(...ages)) / buckets));
+  const counts = new Array(buckets).fill(0);
+  for (const a of ages) counts[Math.min(buckets - 1, Math.floor(a / step))]++;
+  const maxC = Math.max(1, ...counts);
+  let html = '<div class="age-hist">';
+  for (let i = 0; i < buckets; i++) {
+    const h = counts[i] / maxC * 100;
+    html += `<div class="age-bar" style="height:${h}%;background:${color}" title="${i*step}-${(i+1)*step}: ${counts[i]}"></div>`;
+  }
+  html += '</div>';
+  html += `<div style="font-size:9px;color:#555;display:flex;justify-content:space-between"><span>0</span><span>${maxAge} ticks</span></div>`;
+  return html;
+}
+
+function makeFreqDist(freqHot, freqScan) {
+  const buckets = 16;
+  const hotC = new Array(buckets).fill(0);
+  const scanC = new Array(buckets).fill(0);
+  for (const f of freqHot) hotC[Math.min(15, f)]++;
+  for (const f of freqScan) scanC[Math.min(15, f)]++;
+  const maxC = Math.max(1, ...hotC, ...scanC);
+
+  let html = '<div class="freq-dist">';
+  for (let i = 0; i < buckets; i++) {
+    const hh = hotC[i] / maxC * 100;
+    const sh = scanC[i] / maxC * 100;
+    html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;height:100%;justify-content:flex-end">`;
+    html += `<div style="width:100%;height:${hh}%;background:#f7768e;border-radius:2px 2px 0 0;min-height:${hotC[i]?1:0}px" title="hot freq=${i}: ${hotC[i]}"></div>`;
+    html += `<div style="width:100%;height:${sh}%;background:#7dcfff;border-radius:2px 2px 0 0;min-height:${scanC[i]?1:0}px" title="scan freq=${i}: ${scanC[i]}"></div>`;
+    html += `</div>`;
+  }
+  html += '</div>';
+  html += '<div style="font-size:9px;color:#555;display:flex;justify-content:space-between"><span>freq 0</span><span>15</span></div>';
+  return html;
+}
+
+function render(data) {
+  if (!data || !data.configs) return;
+  const p = data.params;
+
+  document.getElementById('batch-num').textContent = data.batch;
+  const phaseBadge = document.getElementById('phase-badge');
+  phaseBadge.textContent = p.phase.toUpperCase();
+  phaseBadge.className = `phase phase-${p.phase}`;
+
+  const grid = document.getElementById('main-grid');
+  let html = '';
+
+  const configs = Object.keys(data.configs).sort((a, b) => +a - +b);
+
+  // Time-series hit rate chart
+  html += `<div class="panel wide">
+    <h2>Hot Hit Rate Over Time (per batch)</h2>
+    <canvas id="hr-canvas" width="1200" height="150" style="width:100%;height:150px;background:#0d0d14;border-radius:4px;"></canvas>
+  </div>`;
+
+  for (const wpct of configs) {
+    const cfg = data.configs[wpct];
+    const segs = cfg.segments;
+    const maxAge = Math.max(
+      segs.window.maxAge || 1,
+      segs.probation.maxAge || 1,
+      segs.protected.maxAge || 1
+    );
+
+    const segData = {
+      window: { hot: segs.window.hotCount, scan: segs.window.scanCount },
+      probation: { hot: segs.probation.hotCount, scan: segs.probation.scanCount },
+      protected: { hot: segs.protected.hotCount, scan: segs.protected.scanCount },
+    };
+
+    html += `<div class="panel">
+      <h2>w${wpct} (${wpct}% window)</h2>
+
+      <div class="kpi-row">
+        <div class="kpi"><div class="val hot-color">${cfg.hotHr.toFixed(1)}%</div><div class="lbl">Hot HR</div></div>
+        <div class="kpi"><div class="val scan-color">${cfg.scanHr.toFixed(1)}%</div><div class="lbl">Scan HR</div></div>
+        <div class="kpi"><div class="val" style="color:#73daca">${cfg.admissions}</div><div class="lbl">Admits</div></div>
+        <div class="kpi"><div class="val" style="color:#555">${cfg.rejections}</div><div class="lbl">Rejects</div></div>
+      </div>
+
+      <h3>Segment Composition (hot vs scan)</h3>
+      <div class="legend">
+        <span><span class="dot" style="background:#e0af68"></span> Win/hot</span>
+        <span><span class="dot" style="background:#544a30"></span> Win/scan</span>
+        <span><span class="dot" style="background:#bb9af7"></span> Prob/hot</span>
+        <span><span class="dot" style="background:#443a5a"></span> Prob/scan</span>
+        <span><span class="dot" style="background:#9ece6a"></span> Prot/hot</span>
+        <span><span class="dot" style="background:#3a4a2a"></span> Prot/scan</span>
+      </div>
+      ${makeSegBar(segData, cfg.capacity)}
+
+      <h3>Window (${segs.window.size} entries, avg age ${segs.window.avgAge.toFixed(0)})</h3>
+      ${makeAgeHist(segs.window.ages, '#e0af68', maxAge)}
+
+      <h3>Probation (${segs.probation.size} entries, avg age ${segs.probation.avgAge.toFixed(0)})</h3>
+      ${makeAgeHist(segs.probation.ages, '#bb9af7', maxAge)}
+
+      <h3>Protected (${segs.protected.size} entries, avg age ${segs.protected.avgAge.toFixed(0)})</h3>
+      ${makeAgeHist(segs.protected.ages, '#9ece6a', maxAge)}
+
+      <h3>Sketch Frequency (hot=red, scan=blue)</h3>
+      ${makeFreqDist(cfg.freqHot, cfg.freqScan)}
+
+      <h3>Hot Key Map (${p.hotKeys} keys)</h3>
+      ${makeKeyGrid(cfg, p.hotKeys)}
+    </div>`;
+  }
+
+  grid.innerHTML = html;
+
+  // Draw time-series canvas
+  const canvas = document.getElementById('hr-canvas');
+  if (canvas && configs.length > 0) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#1a1a24';
+    ctx.lineWidth = 1;
+    for (let y = 0; y <= 100; y += 25) {
+      const py = H - (y / 100) * H;
+      ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
+      ctx.fillStyle = '#444'; ctx.font = '10px monospace';
+      ctx.fillText(y + '%', 2, py - 2);
+    }
+
+    const colors = { '1': '#f7768e', '50': '#e0af68', '99': '#7dcfff' };
+    const labels = { '1': 'w1', '50': 'w50', '99': 'w99' };
+
+    for (const wpct of configs) {
+      const hist = data.configs[wpct].history || [];
+      if (hist.length < 2) continue;
+      const maxPts = Math.min(hist.length, 300);
+      const startIdx = hist.length - maxPts;
+
+      ctx.strokeStyle = colors[wpct] || '#888';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < maxPts; i++) {
+        const x = (i / maxPts) * W;
+        const y = H - (hist[startIdx + i].batchHotHr / 100) * H;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      const lastHr = hist[hist.length - 1].batchHotHr;
+      ctx.fillStyle = colors[wpct] || '#888';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(`${labels[wpct]}: ${lastHr.toFixed(1)}%`, W - 100, H - (lastHr / 100) * H - 4);
+    }
+  }
+}
+
+function tick() {
+  if (!paused && SIM.configs.length > 0) {
+    SIM.runBatch();
+    render(SIM.getState());
+  }
+  timerHandle = setTimeout(tick, 50); // ~20 batches/s
+}
+
+// Init from URL params or defaults
+function initFromURL() {
+  const url = new URLSearchParams(window.location.search);
+  const fields = {
+    'capacity': 'p-capacity',
+    'hot_keys': 'p-hot',
+    'scan_keys': 'p-scan',
+    'zipf_s': 'p-zipf',
+    'hot_rate': 'p-hotrate',
+    'scan_rate': 'p-scanrate',
+  };
+  for (const [param, elemId] of Object.entries(fields)) {
+    if (url.has(param)) {
+      document.getElementById(elemId).value = url.get(param);
+    }
+  }
+}
+
+initFromURL();
+doReset();
+tick();
+</script>
+</body>
+</html>
